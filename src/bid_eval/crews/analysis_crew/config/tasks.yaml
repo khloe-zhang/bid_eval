@@ -1,0 +1,104 @@
+extract_requirements_task:
+  description: >
+    以下是从招标文件中解析出的原始内容：
+
+    {tender_content}
+
+    请完成以下工作：
+    1. 通读全部内容，识别所有技术、商务、合规指标条目
+    2. 区分强制要求（含"须"、"应"、"必须"、"不低于"、"不少于"等表述）
+       和非强制要求（含"宜"、"可"、"建议"等表述），强制要求 mandatory 设为 true
+    3. 为每条指标分配唯一编号 item_id，格式为原文章节号（如 3.2.1）；
+       若原文无编号则按 R001、R002 顺序分配
+    4. 按以下类别归类每条指标：
+       硬件规格 / 软件功能 / 性能指标 / 合规资质 / 商务条款 / 服务要求
+    5. 对表述模糊、难以判断的条目，将 confidence 设为 0.6
+  expected_output: >
+    符合以下结构的 JSON 对象，不输出任何其他内容，不要用 markdown 格式包裹：
+    {
+      "items": [
+        {
+        "item_id": "3.2.1",
+        "section": "3.2 技术要求",
+        "requirement": "CPU 主频不低于 2.5GHz",
+        "category": "硬件规格",
+        "mandatory": true,
+        "confidence": 1.0
+        }
+      ]
+    }
+  agent: tender_extractor
+  output_file: data/projects/{project_id}/parsed/requirements.json
+
+extract_responses_task:
+  description: >
+    以下是从投标文件中解析出的原始内容：
+
+    {bid_content}
+
+    招标需求列表如下：
+
+    {requirements_json}
+
+    请完成以下工作：
+    1. 针对需求列表中的每一条 item_id，在投标文件中逐条定位对应的响应内容
+    2. 准确摘录投标方的原文表述，不要意译或总结
+    3. 若投标文件中未找到对应响应，response 填写"未响应"
+    4. source_page 填写来源章节或页码，格式如"第3章 技术方案 P12"
+  expected_output: >
+    严格符合以下结构的 JSON 对象，不输出任何其他内容，不要用 markdown 格式包裹：
+    {
+      "items": [
+        {
+          "item_id": "3.1",
+          "response": "本方案采用Intel Xeon处理器，主频2.3GHz",
+          "source_page": "第3章 技术方案 P12"
+        }
+      ]
+    }
+  agent: bid_extractor
+  context:
+    - extract_requirements_task
+  output_file: data/projects/{project_id}/parsed/responses.json
+
+analyze_deviations_task:
+  description: >
+    请根据以下招标需求列表和投标响应列表，逐条进行偏离分析。
+
+    招标需求：
+    {requirements_json}
+
+    投标响应：
+    {responses_json}
+
+    判断规则：
+    - 无偏离：投标响应完全满足招标要求，或存在细微差异但不影响功能实现
+    - 正偏离：投标响应优于招标要求（如要求 2.5GHz，投标提供 3.2GHz）
+    - 负偏离：投标响应低于或未满足招标要求，或响应为"未响应"
+
+    对于每条负偏离，必须提供 solution，要求：
+    - 具体可操作，不能泛泛而谈（如"提供说明"不够，需说明提供什么说明）
+    - 结合招标要求和投标实际情况给出针对性措施
+    - 常见处理方向：补充技术说明、提供检测报告、承诺升级方案、
+      引用相关标准论证等效性
+
+  expected_output: >
+    严格符合以下结构的 JSON 对象，不输出任何其他内容，不要用 markdown 格式包裹：
+    {
+      "items": [
+        {
+          "item_id": "3.1",
+          "requirement": "CPU主频不低于2.5GHz",
+          "response": "本方案采用Intel Xeon处理器，主频2.3GHz",
+          "deviation_type": "负偏离",
+          "deviation_detail": "投标主频2.3GHz，低于要求的2.5GHz",
+          "solution": "提供压测报告证明综合性能满足业务需求",
+          "confidence": 1.0
+        }
+      ]
+    }
+  agent: deviation_analyzer
+  context:
+    - extract_requirements_task
+    - extract_responses_task
+  output_file: data/projects/{project_id}/parsed/deviations.json

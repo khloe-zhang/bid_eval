@@ -1,0 +1,26 @@
+[project]
+name = "bid_eval"
+version = "0.1.0"
+description = "bid_eval using crewAI"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "crewai[tools]==1.14.2",
+    "magic-pdf>=1.0.1",
+    "streamlit>=1.45.0",
+]
+
+[project.scripts]
+bid_eval = "bid_eval.main:run"
+run_crew = "bid_eval.main:run"
+train = "bid_eval.main:train"
+replay = "bid_eval.main:replay"
+test = "bid_eval.main:test"
+run_with_trigger = "bid_eval.main:run_with_trigger"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "flow"

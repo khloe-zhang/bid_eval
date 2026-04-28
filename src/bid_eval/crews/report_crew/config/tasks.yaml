@@ -1,0 +1,45 @@
+generate_report_task:
+  description: >
+    请根据以下偏离分析结果，生成完整的招投标偏离表。
+
+    项目名称：{project_name}
+    报告生成时间：{generated_at}
+    偏离分析数据：
+    {deviations_json}
+
+    输出要求：
+    1. 按 deviation_type 分组排列：无偏离 → 正偏离 → 负偏离
+    2. 每条记录包含以下字段：
+       - 序号
+       - 招标要求（来自 requirement 字段）
+       - 投标响应（来自 response 字段）
+       - 偏离情况（来自 deviation_type + deviation_detail）
+       - 处理方案（负偏离填 solution，其余填"/"）
+    3. 语言风格正式，使用第三方视角描述，避免第一人称
+    4. 负偏离的处理方案需完整保留，不得缩减
+    5. 在报告末尾附上统计摘要：
+       总条数 / 无偏离数 / 正偏离数 / 负偏离数
+  expected_output: >
+    一个 JSON 对象，严格符合以下样例结构，不输出任何其他内容：
+    {
+      "project_name": "某市政务云采购项目",
+      "generated_at": "2025-04-18 10:23:00",
+      "summary": {
+        "total": 10,
+        "no_deviation": 6,
+        "positive_deviation": 2,
+        "negative_deviation": 2
+      },
+      "rows": [
+        {
+          "index": 1,
+          "requirement": "CPU 主频不低于 2.5GHz",
+          "response": "本方案采用 Intel Xeon 处理器，主频 2.3GHz",
+          "deviation_type": "负偏离",
+          "deviation_detail": "投标主频 2.3GHz，低于要求的 2.5GHz，差距 0.2GHz",
+          "solution": "提供该型号 CPU 在实际负载场景下的性能测试报告，证明综合性能满足业务需求；同时承诺在项目交付前升级至满足要求的型号",
+        }
+      ]
+    }
+  agent: report_generator
+  output_file: data/projects/{project_id}/parsed/report_data.json
