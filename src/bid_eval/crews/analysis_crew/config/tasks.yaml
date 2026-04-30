@@ -19,7 +19,6 @@ extract_requirements_task:
       "items": [
         {
         "item_id": "3.2.1",
-        "section": "3.2 技术要求",
         "requirement": "CPU 主频不低于 2.5GHz",
         "category": "硬件规格",
         "mandatory": true,
@@ -83,7 +82,8 @@ analyze_deviations_task:
       引用相关标准论证等效性
 
   expected_output: >
-    严格符合以下结构的 JSON 对象，不输出任何其他内容，不要用 markdown 格式包裹：
+    严格符合以下结构的 JSON 对象，不输出任何其他内容，不要用 markdown 格式包裹。每条 item 必须包含 item_id、requirement、response、deviation_type（只能是"正偏离"/"负偏离"/"无偏离"之一）、deviation_detail、
+    solution（负偏离必填，其余填 null）、confidence 共 7 个字段，不得省略任何字段。
     {
       "items": [
         {

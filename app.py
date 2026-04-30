@@ -346,7 +346,7 @@ def render_analyzing():
             from src.bid_eval.main import DeviationFlow, save_flow_state
             from crewai.flow.async_feedback import HumanFeedbackPending
 
-            flow = DeviationFlow()
+            flow = DeviationFlow(tracing=True)
             saved_dict = state.model_dump()
             for field, value in saved_dict.items():
                 try:
@@ -372,12 +372,21 @@ def render_analyzing():
                 st.session_state.step = "reviewing"
                 st.rerun()  # 触发新请求，渲染 render_reviewing
             else:
-                # 正常完成
-                save_flow_state(project_id, flow.state)
-                st.session_state.flow_state = flow.state
-                st.session_state.deviations = flow.state.deviations
-                st.session_state.step = "reviewing"
-                st.rerun()
+                current_step = getattr(flow.state, "current_step", "")
+                if current_step == "awaiting_review":
+                    # kickoff 没有返回 HumanFeedbackPending，但 Flow 实际上停在了 awaiting_review
+                    # 说明 HumanFeedbackPending 被框架内部捕获了，flow 对象本身就是续传句柄
+                    st.session_state.flow_state  = flow.state
+                    st.session_state.deviations  = flow.state.deviations
+                    st.session_state.flow_for_review = flow   # ✅ 同样保存
+                    st.session_state.step = "reviewing"
+                else:
+                # 真正的正常完成 （current_step == "done"）
+                    save_flow_state(project_id, flow.state)
+                    st.session_state.flow_state = flow.state
+                    st.session_state.deviations = flow.state.deviations
+                    st.session_state.step = "reviewing"
+                    st.rerun()
 
         except Exception as e:
             st.session_state.error = f"分析流程执行失败：{str(e)}"
@@ -467,15 +476,17 @@ def render_reviewing():
             use_container_width=True,
         ):
             if pending_flow:
-                # 有 pending flow，通过 resume 继续流程
-                from src.bid_eval.main import save_flow_state
-                pending_flow.resume("approved")
+                # 有 pending flow，通过 from_pending() 重建后再 resume
+                from src.bid_eval.main import save_flow_state, DeviationFlow
+                # pending_flow.state 包含完整上下文，通过 from_pending 重建才能 resume
+                restored_flow = DeviationFlow.from_pending(pending_flow.state.id)
+                #restored_flow.resume("approved")
                 with st.spinner("正在生成偏离表..."):
-                    pending_flow.resume("approved")
-                save_flow_state(state.project.project_id, pending_flow.state)
-                st.session_state.flow_state = pending_flow.state
-                st.session_state.deviations = pending_flow.state.deviations
-                st.session_state.output_path = getattr(pending_flow.state, 'output_path', None)
+                    restored_flow.resume("approved")
+                save_flow_state(state.project.project_id, restored_flow.state)
+                st.session_state.flow_state = restored_flow.state
+                st.session_state.deviations = restored_flow.state.deviations
+                st.session_state.output_path = getattr(restored_flow.state, 'output_path', None)
                 del st.session_state["flow_for_review"]
                 st.session_state.step = "done"   # ← 直接跳 done，跳过 generating
             else:
@@ -490,12 +501,13 @@ def render_reviewing():
             disabled=not revision_note,
         ):
             if pending_flow:
-                # 有 pending flow，通过 resume 继续流程
-                from src.bid_eval.main import save_flow_state
-                pending_flow.resume(f"需要修改：{revision_note}")
-                save_flow_state(state.project.project_id, pending_flow.state)
-                st.session_state.flow_state = pending_flow.state
-                st.session_state.deviations = pending_flow.state.deviations
+                # 有 pending flow，通过 from_pending() 重建后再 resume
+                from src.bid_eval.main import save_flow_state, DeviationFlow
+                restored_flow = DeviationFlow.from_pending(pending_flow.state.id)
+                restored_flow.resume(f"需要修改：{revision_note}")
+                save_flow_state(state.project.project_id, restored_flow.state)
+                st.session_state.flow_state = restored_flow.state
+                st.session_state.deviations = restored_flow.state.deviations
                 del st.session_state["flow_for_review"]
             st.session_state.step = "generating"
             st.rerun()
@@ -516,7 +528,7 @@ def render_revising():
 
     with st.spinner("正在根据修改意见重新分析..."):
         try:
-            flow = DeviationFlow()
+            flow = DeviationFlow(tracing=True)
 
             bid_content_with_note = (
                 (state.bid_content or "") )

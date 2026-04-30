@@ -1,5 +1,5 @@
 # Pydantic 模型定义，用于校验流程中的数据结构
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -7,7 +7,6 @@ from datetime import datetime
 class RequirementItem(BaseModel):
     """单条招标指标"""
     item_id: str                        # 条目编号，如 "3.2.1"
-    section: str                        # 所属章节，如 "3.2 技术要求"
     requirement: str                    # 指标原文
     category: str                       # 分类：硬件规格 / 软件功能 / 合规资质 / 商务条款
     mandatory: bool = True              # 是否为强制要求
@@ -23,6 +22,7 @@ class ResponseItem(BaseModel):
 
 class DeviationItem(BaseModel):
     """单条偏离分析结果"""
+    model_config = ConfigDict(populate_by_name=True) # 允许字段名和别名都能匹配，大小写不敏感
     item_id: str
     requirement: str
     response: str

@@ -323,7 +323,6 @@ def check_interrupted_flow(project_id: str) -> dict | None:
         pass
     return None
 
-# main.py 末尾添加
 
 def generate_deviation_report(
     project_id: str,
