@@ -1,7 +1,9 @@
 .env
 __pycache__/
+.pytest_cache/
 .DS_Store
 __init__.py
+.claude/
 .venv/
 AGENTS.md
 Memory-Guide.md
@@ -9,3 +11,9 @@ RAG-Guide.md
 HumanFeedBack-Guide.md
 docs/
 tests/
+*Guide.md
+docs/
+CustomTools-Guide.md
+import列表.txt
+.codex/
+/.claude

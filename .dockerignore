@@ -1,0 +1,16 @@
+.venv
+.git
+__pycache__
+.pytest_cache
+.claude
+.venv
+venv
+env
+*.pyc
+.env
+bid_eval/__pycache__
+src/bid_eval/__pycache__
+tests
+docs
+graphify-out
+*.egg-info

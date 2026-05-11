@@ -54,31 +54,32 @@ def _parse_with_mineru(file_path: Path) -> Optional[str]:
     使用 MinerU 解析 PDF，适合复杂表格和扫描件。
     未安装时返回 None，由调用方降级到 pdfplumber。
     """
-    try:
-        from magic_pdf.data.data_reader_writer import FileBasedDataWriter
-        from magic_pdf.data.dataset import PymuDocDataset
-        from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
-        from magic_pdf.config.enums import SupportedPdfParseMethod
-    except ImportError:
-        return None
+    return None  # 暂时禁用 MinerU，后续根据实际效果决定是否重新启用
+    # try:
+    #     from magic_pdf.data.data_reader_writer import FileBasedDataWriter
+    #     from magic_pdf.data.dataset import PymuDocDataset
+    #     from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
+    #     from magic_pdf.config.enums import SupportedPdfParseMethod
+    # except ImportError:
+    #     return None
 
-    try:
-        pdf_bytes = file_path.read_bytes()
-        ds = PymuDocDataset(pdf_bytes)
+    # try:
+    #     pdf_bytes = file_path.read_bytes()
+    #     ds = PymuDocDataset(pdf_bytes)
 
-        # 自动判断是否为扫描件
-        if ds.classify() == SupportedPdfParseMethod.OCR:
-            infer_result = ds.apply(doc_analyze, ocr=True)
-        else:
-            infer_result = ds.apply(doc_analyze, ocr=False)
+    #     # 自动判断是否为扫描件
+    #     if ds.classify() == SupportedPdfParseMethod.OCR:
+    #         infer_result = ds.apply(doc_analyze, ocr=True)
+    #     else:
+    #         infer_result = ds.apply(doc_analyze, ocr=False)
 
-        # 提取 Markdown 格式内容（含表格）
-        md_writer = FileBasedDataWriter("")
-        pipe_result = infer_result.pipe_txt_mode(md_writer)
-        return pipe_result.get_markdown(file_path.stem)
+    #     # 提取 Markdown 格式内容（含表格）
+    #     md_writer = FileBasedDataWriter("")
+    #     pipe_result = infer_result.pipe_txt_mode(md_writer)
+    #     return pipe_result.get_markdown(file_path.stem)
 
-    except Exception as e:
-        return None
+    # except Exception as e:
+    #     return None
 
 
 # ── 主解析函数 ───────────────────────────────────────────────────────────────

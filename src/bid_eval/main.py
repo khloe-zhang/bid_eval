@@ -1,173 +1,213 @@
 #!/usr/bin/env python
-import sys
+import json
+import re
 import warnings
-import uuid
 from datetime import datetime
-from pathlib import Path
 
-
-from crewai.flow.flow import Flow, listen, start
-from crewai.flow.persistence import persist
+from crewai.flow.async_feedback import (
+    HumanFeedbackPending,
+    HumanFeedbackProvider,
+    PendingFeedbackContext,
+)
+from crewai.flow.flow import Flow, listen, or_, start
 from crewai.flow.human_feedback import human_feedback
-from crewai.flow.async_feedback import HumanFeedbackProvider, HumanFeedbackPending, PendingFeedbackContext
-from src.bid_eval.config import memory_llm
+from crewai.flow.persistence import persist
+from opentelemetry import baggage
 
-from src.bid_eval.model import DeviationFlowState, ProjectMeta
+from src.bid_eval.config import memory_llm
+from src.bid_eval.model import DeviationFlowState
 from src.bid_eval.parsing.file_router import parse_files
-from pydantic import BaseModel
+from src.bid_eval.project_store import (
+    STATUS_ANALYZING,
+    STATUS_AWAITING_REVIEW,
+    STATUS_DONE,
+    STATUS_GENERATING,
+    save_flow_snapshot,
+    save_project_index,
+    update_project_index,
+    load_flow_snapshot,
+)
+
+
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
 
 class StreamlitHumanFeedbackProvider(HumanFeedbackProvider):
-    """Non-blocking feedback provider for Streamlit web UI.
-
-    Instead of reading from console (blocking), this raises HumanFeedbackPending
-    to pause the flow. The Streamlit app handles feedback collection via its
-    own UI, then calls flow.resume(feedback) to continue.
-    """
+    """Non-blocking feedback provider for Streamlit web UI."""
 
     def request_feedback(self, context: PendingFeedbackContext, flow: Flow) -> str:
         raise HumanFeedbackPending(
             context=context,
-            callback_info={"provider": "streamlit"},
+            callback_info={
+                "provider": "streamlit",
+                "project_id": getattr(flow.state.project, "project_id", ""),
+            },
         )
 
-warnings.filterwarnings("ignore", category=SyntaxWarning, module="pysbd")
 
-PROJECTS_DIR = Path("data/projects")
+def _flow_inputs(flow: Flow) -> dict:
+    inputs = getattr(flow, "inputs", None) or baggage.get_baggage("flow_inputs") or {}
+    return inputs if isinstance(inputs, dict) else {}
+
+
+def _project_id(flow: Flow[DeviationFlowState]) -> str:
+    return (
+        getattr(flow.state, "id", "")
+        or getattr(flow.state.project, "project_id", "")
+    )
+
+
+def _project_name(flow: Flow[DeviationFlowState]) -> str:
+    return getattr(flow.state.project, "project_name", "") or _project_id(flow)
+
 
 def save_flow_state(project_id: str, state: DeviationFlowState) -> None:
-    path = PROJECTS_DIR / project_id / "flow_state.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json(), encoding="utf-8")
+    """Compatibility alias: save a fallback Flow snapshot."""
+    save_flow_snapshot(project_id, state)
+
 
 def load_flow_state(project_id: str) -> DeviationFlowState | None:
-    path = PROJECTS_DIR / project_id / "flow_state.json"
-    if not path.exists():
-        return None
-    try:
-        return DeviationFlowState.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
-    except Exception:
-        return None
+    """Compatibility alias: load a fallback Flow snapshot."""
+    return load_flow_snapshot(project_id)
+
 
 @persist()
 class DeviationFlow(Flow[DeviationFlowState]):
     @start()
     def parse_documents(self):
-        """Step 1：解析文档 + 绑定持久化 ID"""
-        inputs = getattr(self, "inputs", None) or {}
-        if not isinstance(inputs, dict):
-            inputs = {}
-
-        # === 修复：绑定 project_id 到 state.id ===
+        """Step 1: parse documents and bind the Flow id to project_id."""
+        inputs = _flow_inputs(self)
         project_id = (
-            inputs.get("id") or 
-            inputs.get("project_id") or 
-            getattr(self.state.project, "project_id", None) or
-            getattr(self.state, "id", None)
+            inputs.get("id")
+            or inputs.get("project_id")
+            or getattr(self.state.project, "project_id", None)
+            or getattr(self.state, "id", None)
+        )
+        if not project_id:
+            raise ValueError("缺少 project_id，无法启动或恢复 Flow。")
+
+        self.state.id = project_id
+        self.state.project.project_id = project_id
+        self.state.project.project_name = (
+            inputs.get("project_name")
+            or self.state.project.project_name
+            or project_id
         )
 
-        if project_id and not getattr(self.state, 'id', None):
-            self.state.id = project_id
-        
-        if project_id and not getattr(self.state.project, "project_id", None):
-            self.state.project.project_id = project_id
+        if inputs.get("tender_files"):
+            self.state.project.tender_files = list(inputs["tender_files"])
+        if inputs.get("bid_files"):
+            self.state.project.bid_files = list(inputs["bid_files"])
+
+        if self.state.current_step == "done" and self.state.output_path:
+            return self.state.tender_content
 
         self.state.current_step = "parsing"
+        save_project_index(
+            project_id=project_id,
+            project_name=self.state.project.project_name,
+            status="parsing",
+            tender_files=self.state.project.tender_files,
+            bid_files=self.state.project.bid_files,
+            flow_id=project_id,
+            output_path=self.state.output_path,
+        )
 
-
-
-        print(f"[DEBUG] parse_documents - project_id: {project_id}")
-        print(f"[DEBUG] tender_files: {getattr(self.state.project, 'tender_files', None)}")
-        print(f"[DEBUG] bid_files: {getattr(self.state.project, 'bid_files', None)}")
-
-        # === 防御性检查 ===
-        tender_files = getattr(self.state.project, 'tender_files', []) or []
-        bid_files = getattr(self.state.project, 'bid_files', []) or []
-
+        tender_files = self.state.project.tender_files or []
+        bid_files = self.state.project.bid_files or []
         if not tender_files:
             raise ValueError(f"招标文件列表为空！project_id={project_id}")
         if not bid_files:
             raise ValueError(f"投标文件列表为空！project_id={project_id}")
 
-
-
-
-        # === 接收解析选项 ===
-        # use_mineru = self.inputs.get("use_mineru", False)
-        # parse_images = self.inputs.get("parse_images", False)
-
-        inputs       = getattr(self, "inputs", None) or {}
-        use_mineru   = inputs.get("use_mineru", False)
+        use_mineru = inputs.get("use_mineru", False)
         parse_images = inputs.get("parse_images", False)
 
-        try:
-            # 解析招标文件
-            tender_content = parse_files(
-                tender_files,
-                use_mineru=use_mineru,
-                parse_images=parse_images,
-            )
+        tender_content = parse_files(
+            tender_files,
+            use_mineru=use_mineru,
+            parse_images=parse_images,
+        )
+        bid_content = parse_files(
+            bid_files,
+            use_mineru=use_mineru,
+            parse_images=parse_images,
+        )
 
-            # 解析投标文件
-            bid_content = parse_files(
-                bid_files,
-                use_mineru=use_mineru,
-                parse_images=parse_images,
-            )
+        self.state.tender_content = tender_content
+        self.state.bid_content = bid_content
+        save_flow_snapshot(project_id, self.state)
 
-            # 存入 state 供后续步骤使用
-            self.state.tender_content = tender_content
-            self.state.bid_content    = bid_content
-
-            print(f"[DEBUG] 解析成功 - tender_content length: {len(tender_content) if tender_content else 0}")
-            print("[DEBUG] parse_documents 即将返回，Flow 框架应触发 run_analysis")
-
-            return tender_content
-        except Exception as e:
-            print(f"[ERROR] 解析文档失败: {e}")
-            raise
+        return tender_content
 
     @listen(parse_documents)
     def run_analysis(self, _):
-        print("[DEBUG] run_analysis triggered!")
-        # 如果是 revision 触发的，强制重新执行（即使 current_step 是 awaiting_review）
-        inputs = getattr(self, "inputs", None) or {}
-        if (inputs.get("force_reanalyze") or inputs.get("revision_note")):
-            self.state.current_step = "analyzing"   # 强制重置
+        """Step 2: run AnalysisCrew and store structured deviations."""
+        project_id = _project_id(self)
+        if self.state.current_step == "done" and self.state.output_path:
+            return self.state.deviations
 
-        if self.state.current_step in ["awaiting_review", "generating", "done"]:
-            return self.state.deviations  # 已完成，跳过
-        
-        """Step 2：运行 AnalysisCrew，提取指标、匹配响应、分析偏离"""
-
-        self.state.current_step = "analyzing"
+        self.state.current_step = STATUS_ANALYZING
+        update_project_index(project_id, status=STATUS_ANALYZING)
 
         from src.bid_eval.crews.analysis_crew.analysis_crew import AnalysisCrew
+
         crew_instance = AnalysisCrew()
-        crew_instance.project_id = self.state.project.project_id
+        crew_instance.project_id = project_id
         result = crew_instance.crew().kickoff(
             inputs={
-                "project_id":       self.state.project.project_id,
-                "tender_content":   self.state.tender_content,
-                "bid_content":      self.state.bid_content,
-                "requirements_json": "",   # 由 CrewAI context 机制自动传递
-                "responses_json":   "",    # 由 CrewAI context 机制自动传递
+                "project_id": project_id,
+                "tender_content": self.state.tender_content,
+                "bid_content": self.state.bid_content,
+                "requirements_json": "",
+                "responses_json": "",
             }
         )
 
-        # 取 analyze_deviations_task 的 pydantic 输出存入 state
-        # self.state.deviations = result.pydantic or []
-        # self.state.deviations = result.pydantic.items if result.pydantic else []
-        self.state.deviations = result.pydantic.items if getattr(result, 'pydantic', None) else []
-        self.state.current_step = "awaiting_review"
-
-        save_flow_state(self.state.project.project_id, self.state)
+        self.state.deviations = (
+            result.pydantic.items if getattr(result, "pydantic", None) else []
+        )
+        self.state.current_step = STATUS_AWAITING_REVIEW
+        save_flow_snapshot(project_id, self.state)
+        update_project_index(project_id, status=STATUS_AWAITING_REVIEW)
 
         return self.state.deviations
 
-    @listen(run_analysis)
+    @listen("revise")
+    def handle_revision(self, feedback_result):
+        """Step 3a: re-run analysis with user feedback, then review again."""
+        project_id = _project_id(self)
+        feedback = getattr(feedback_result, "feedback", str(feedback_result))
+        self.state.revision_note = feedback
+        self.state.revision_history.append(feedback)
+        self.state.current_step = "revising"
+        update_project_index(project_id, status="revising")
+
+        revision_note = f"\n\n[用户修改意见]\n{feedback}"
+
+        from src.bid_eval.crews.analysis_crew.analysis_crew import AnalysisCrew
+
+        crew_instance = AnalysisCrew()
+        crew_instance.project_id = project_id
+        result = crew_instance.crew().kickoff(
+            inputs={
+                "project_id": project_id,
+                "tender_content": self.state.tender_content,
+                "bid_content": (self.state.bid_content or "") + revision_note,
+                "requirements_json": "",
+                "responses_json": "",
+            }
+        )
+
+        self.state.deviations = (
+            result.pydantic.items if getattr(result, "pydantic", None) else []
+        )
+        self.state.current_step = STATUS_AWAITING_REVIEW
+        save_flow_snapshot(project_id, self.state)
+        update_project_index(project_id, status=STATUS_AWAITING_REVIEW)
+
+        return self.state.deviations
+
     @human_feedback(
         message=(
             "偏离分析已完成，请审核以下负偏离条目及处理方案。\n"
@@ -178,150 +218,90 @@ class DeviationFlow(Flow[DeviationFlowState]):
         default_outcome="approved",
         provider=StreamlitHumanFeedbackProvider(),
     )
+    @listen(or_(run_analysis, handle_revision))
     def review_deviations(self, deviations):
-        """Step 3：Human-in-the-loop，用户审核负偏离条目"""
+        """Step 3: pause for human review in Streamlit."""
         return deviations
-
-    @listen("revise")
-    def handle_revision(self, feedback_result):
-        """Step 4a：用户要求修改，将反馈注入 state 后重新分析"""
-
-        self.state.current_step = "revising"
-
-        # 把用户反馈追加到 bid_content，让 AnalysisCrew 重新运行时能看到修改意见
-        revision_note = (
-            f"\n\n[用户修改意见]\n{feedback_result.feedback}"
-        )
-
-        from src.bid_eval.crews.analysis_crew.analysis_crew import AnalysisCrew
-        crew_instance = AnalysisCrew()
-        crew_instance.project_id = self.state.project.project_id
-        result = crew_instance.crew().kickoff(
-            inputs={
-                "project_id":        self.state.project.project_id,
-                "tender_content":    self.state.tender_content,
-                "bid_content":       self.state.bid_content + revision_note,
-                "requirements_json": "",
-                "responses_json":    "",
-            }
-        )
-
-        # self.state.deviations   = result.pydantic or []
-        # self.state.deviations   = result.pydantic.items if result.pydantic else []
-        self.state.deviations   = result.pydantic.items if getattr(result, 'pydantic', None) else []
-        self.state.current_step = "awaiting_review"
-
-        return self.state.deviations
 
     @listen("approved")
     def generate_report(self, feedback_result):
-        """Step 4b：用户确认，运行 ReportCrew 生成偏离表"""
-        if self.state.current_step == "done" and self.state.output_path:
-                return self.state.output_path  # 已生成，跳过
-        
-        self.state.current_step = "generating"
+        """Step 4: generate the final Excel report."""
+        project_id = _project_id(self)
+        if self.state.current_step == STATUS_DONE and self.state.output_path:
+            return self.state.output_path
 
-        import json
-        from datetime import datetime
-        from bid_eval.tools.excel_writer import ExcelWriterTool
+        self.state.current_step = STATUS_GENERATING
+        update_project_index(project_id, status=STATUS_GENERATING)
 
-        # === 原 render_generating 中的三步全部移到这里 ===
         deviations_json = json.dumps(
             [d.model_dump() for d in self.state.deviations],
             ensure_ascii=False,
             indent=2,
         )
 
-        inputs       = getattr(self, "inputs", None) or {}
-        generated_at = inputs.get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        inputs = _flow_inputs(self)
+        generated_at = inputs.get("generated_at") or datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
 
         from src.bid_eval.crews.report_crew.report_crew import ReportCrew
+        from src.bid_eval.tools.excel_writer import ExcelWriterTool
+
         result = ReportCrew().crew().kickoff(
             inputs={
-                "project_id":       self.state.project.project_id,
-                "project_name":     self.state.project.project_name,
-                "generated_at":     generated_at,
-                "deviations_json":  deviations_json,
+                "project_id": project_id,
+                "project_name": _project_name(self),
+                "generated_at": generated_at,
+                "deviations_json": deviations_json,
             }
         )
 
-        # 手动剥离 markdown 代码块，再解析
-        import re, json
         raw = result.raw if result.raw else ""
         raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
         raw = re.sub(r"\s*```$", "", raw)
 
-        #report_json = ReportData.model_validate_json(raw) 
-        #report_json = result.raw if result.raw else "" 初始版
-        report_json = raw
-
-        # 调用 ExcelWriterTool 写入文件
         writer = ExcelWriterTool()
         output_path = writer._run(
-            report_json=report_json,
-            project_id=self.state.project.project_id,
+            report_json=raw,
+            project_id=project_id,
         )
 
-        self.state.output_path  = output_path
-        self.state.current_step = "done"
+        self.state.output_path = output_path
+        self.state.current_step = STATUS_DONE
+        save_flow_snapshot(project_id, self.state)
+        save_project_index(
+            project_id=project_id,
+            project_name=_project_name(self),
+            status=STATUS_DONE,
+            tender_files=self.state.project.tender_files,
+            bid_files=self.state.project.bid_files,
+            flow_id=project_id,
+            output_path=output_path,
+        )
 
         return output_path
 
 
-# ── 入口函数 ──────────────────────────────────────────────────────────────────
 def run():
-    """本地运行入口：crewai run 或 uv run run 触发"""
+    """Local entry point for crewai run."""
     flow = DeviationFlow(tracing=True)
     flow.kickoff()
 
 
-# def load_persisted_flow(project_id: str) -> "DeviationFlow | None":
-#     """
-#     尝试加载指定 project_id 的持久化 Flow 实例（供续传使用）。
-#     如果存在未完成的流程（current_step != "done"），返回该实例；否则返回 None。
-#     """
-#     if not project_id:
-#         return None
-#     try:
-#         flow = DeviationFlow()
-#         # kickoff 会自动按 id 加载状态
-#         # flow.kickoff(inputs={"id": project_id})
-#         flow.kickoff(inputs={"id": project_id, "dry_run": True}) # 仅加载状态，不执行流程
-#         if flow.state.id == project_id:
-#             return flow
-#     except Exception:
-#         pass
-#     return None
-
-
 def check_interrupted_flow(project_id: str) -> dict | None:
-    """
-    检查指定 project_id 是否有被中断的流程。
-    返回流程状态信息，否则返回 None。
-    """
-    if not project_id:
+    """Compatibility helper for older UI code."""
+    state = load_flow_snapshot(project_id)
+    if not state or state.current_step in ["done", "idle"]:
         return None
-    
-    try:
-        # 创建临时 Flow 并强制传入 id 来触发加载
-        flow = DeviationFlow()
-        #flow.kickoff(inputs={"id": project_id})  # 这会加载状态，但如果已 done 会继续执行（需小心）
-        #flow.kickoff(inputs={"id": project_id, "dry_run": True}) # 仅加载状态，不执行流程
-
-        state = flow.state
-        if state.id == project_id and state.current_step not in ["done", "idle"]:
-            return {
-                "project_id": state.project.project_id,
-                "project_name": state.project.project_name,
-                "current_step": state.current_step,
-                "has_deviations": len(state.deviations) > 0,
-                "has_output": bool(state.output_path),
-                "tender_files":   getattr(state.project, "tender_files", []),
-                "bid_files":      getattr(state.project, "bid_files", []),
-            }
-    except Exception:
-        pass
-    return None
+    return {
+        "project_id": state.project.project_id,
+        "project_name": state.project.project_name,
+        "current_step": state.current_step,
+        "has_deviations": len(state.deviations) > 0,
+        "has_output": bool(state.output_path),
+        "tender_files": getattr(state.project, "tender_files", []),
+        "bid_files": getattr(state.project, "bid_files", []),
+    }
 
 
 def generate_deviation_report(
@@ -330,14 +310,9 @@ def generate_deviation_report(
     deviations: list,
     generated_at: str | None = None,
 ) -> str:
-    """
-    独立的报告生成函数，供断点续传场景下 app.py 直接调用。
-    逻辑与 DeviationFlow.generate_report 完全一致。
-    """
-    import json, re
-    from datetime import datetime
-    from src.bid_eval.tools.excel_writer import ExcelWriterTool
+    """Legacy direct report generation path. Prefer Flow.resume('approved')."""
     from src.bid_eval.crews.report_crew.report_crew import ReportCrew
+    from src.bid_eval.tools.excel_writer import ExcelWriterTool
 
     if generated_at is None:
         generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -350,9 +325,9 @@ def generate_deviation_report(
 
     result = ReportCrew().crew().kickoff(
         inputs={
-            "project_id":      project_id,
-            "project_name":    project_name,
-            "generated_at":    generated_at,
+            "project_id": project_id,
+            "project_name": project_name,
+            "generated_at": generated_at,
             "deviations_json": deviations_json,
         }
     )
@@ -368,6 +343,7 @@ def generate_deviation_report(
     )
 
     return output_path
+
 
 if __name__ == "__main__":
     run()

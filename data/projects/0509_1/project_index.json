@@ -1,0 +1,12 @@
+{
+  "project_id": "0509_1",
+  "project_name": "0509_1",
+  "flow_id": "0509_1",
+  "status": "error",
+  "updated_at": "2026-05-09 16:18:36",
+  "tender_files": [],
+  "bid_files": [],
+  "pending_flow_id": null,
+  "output_path": null,
+  "error": "招标文件列表为空！project_id=0509_1"
+}

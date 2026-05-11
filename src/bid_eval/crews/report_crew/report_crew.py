@@ -1,20 +1,10 @@
-from crewai import Agent, Crew, Process, Task, Memory
+from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from typing import List
 
-from src.bid_eval.config import llm, memory_llm
-from src.bid_eval.tools.excel_writer import ExcelWriterTool
+from src.bid_eval.config import llm
 from src.bid_eval.model import ReportData
-from crewai.rag.embeddings.factory import build_embedder
-
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv()
-
-embedder = build_embedder({"provider": "openai", "config": {"model_name": "text-embedding-v4"}})
-
 
 @CrewBase
 class ReportCrew:
@@ -52,5 +42,4 @@ class ReportCrew:
             process=Process.sequential,
             verbose=False,
             tracing=True,
-            memory = Memory(embedder=embedder, llm=memory_llm)
         )

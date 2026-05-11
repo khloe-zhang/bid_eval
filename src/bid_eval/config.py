@@ -41,10 +41,14 @@ memory_llm = LLM(
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR        = BASE_DIR / os.getenv("DATA_DIR", "data")
 PROJECTS_DIR    = DATA_DIR / "projects"
-VECTORSTORE_DIR = DATA_DIR / "vectorstore"
+#VECTORSTORE_DIR = DATA_DIR / "vectorstore"
 KNOWLEDGE_DIR   = BASE_DIR / os.getenv("KNOWLEDGE_DIR", "knowledge")
 DATABASE_DIR    = DATA_DIR / "database"
 
 # ── 运行时目录自动创建 ───────────────────────────────────
-for _dir in [PROJECTS_DIR, VECTORSTORE_DIR, KNOWLEDGE_DIR, DATABASE_DIR]:
+_runtime_dirs = [PROJECTS_DIR, KNOWLEDGE_DIR, DATABASE_DIR]
+if "VECTORSTORE_DIR" in globals():
+    _runtime_dirs.append(VECTORSTORE_DIR)
+
+for _dir in _runtime_dirs:
     _dir.mkdir(parents=True, exist_ok=True)

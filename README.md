@@ -1,9 +1,10 @@
+
 # BidEval — 招投标偏离表智能比对系统
 
 [![Python](https://img.shields.io/badge/Python-3.13%2B-blue.svg)](https://python.org)
 [![CrewAI](https://img.shields.io/badge/CrewAI-1.14.2-FF6B6B.svg)](https://crewai.com)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.45-FF4B4B.svg)](https://streamlit.io)
-[![License: Apache](https://img.shields.io/badge/License-Apache_2.0-blue.svg )](LICENSE)
+[![License: Apache](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 ## 功能介绍
 
@@ -75,7 +76,6 @@ CrewAI 提供 @humanfeedback 模块，支持挂起状态等待用户意见。偏
 **向量知识库（ChromaDB）**：将 `knowledge/` 目录下的 `.docx`、`.pdf` 文档向量化存储于 ChromaDB，检索时将相关文档片段作为上下文注入 Agent Prompt，为偏离判断提供行业标准依据。
 
 **结构化案例库（SQLite）**：历史偏离案例以结构化形式存入 `deviation_cases.db`，通过关键词 LIKE 检索相似历史处理方案，为当前偏离提供参考先例。
-
 
 ## 技术栈
 

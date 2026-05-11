@@ -70,6 +70,8 @@ class DeviationFlowState(BaseModel):
     # 用户确认标记
     requirements_confirmed: bool = False
     deviations_confirmed: bool = False
+    revision_note: Optional[str] = None
+    revision_history: list[str] = []
 
     # 输出
     output_path: Optional[str] = None  # 生成的 Excel 文件路径

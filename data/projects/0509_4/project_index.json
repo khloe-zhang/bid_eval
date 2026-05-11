@@ -1,0 +1,16 @@
+{
+  "project_id": "0509_4",
+  "project_name": "0509_4",
+  "flow_id": "0509_4",
+  "status": "done",
+  "updated_at": "2026-05-09 17:27:52",
+  "tender_files": [
+    "/home/yushan/projects/bid_eval/data/projects/0509_4/uploads/tender/招标需求文档3.docx"
+  ],
+  "bid_files": [
+    "/home/yushan/projects/bid_eval/data/projects/0509_4/uploads/bid/投标文档3.docx"
+  ],
+  "pending_flow_id": "0509_4",
+  "output_path": "/home/yushan/projects/bid_eval/data/projects/0509_4/output/偏离表_20260509_172752.xlsx",
+  "error": null
+}

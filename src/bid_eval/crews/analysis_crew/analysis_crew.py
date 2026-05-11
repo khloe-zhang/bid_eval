@@ -18,8 +18,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 通过 pre-built callable 创建自定义 embedder 
-embedder = build_embedder({"provider": "openai", "config": {"model_name": "text-embedding-v4"}})
-
+#embedder = build_embedder({"provider": "openai", "config": {"model_name": "text-embedding-v4"}})
+embedder = build_embedder({
+    "provider": "openai",
+    "config": {
+    "model_name": "text-embedding-v4",
+    "api_key": BAILIAN_API_KEY,
+    "api_base": BAILIAN_BASE_URL,
+    }    
+})
 
 def _create_rag_tool() -> BaseTool:
     """创建 RAG Tool 从 knowledge/ 文件夹加载 Word 和 PDF 文档作为知识库"""
@@ -40,7 +47,6 @@ def _create_rag_tool() -> BaseTool:
     collection_name = "bid_eval_knowledge"
 
     rag_tool = RagTool(
-        collection_name=collection_name,
         summarize=False,
         config={
             "vectordb": {
@@ -151,11 +157,15 @@ class AnalysisCrew():
 
     @crew
     def crew(self) -> Crew:
+        if not self.project_id:
+            raise ValueError("AnalysisCrew.project_id is required for project-scoped memory.")
+
         # 全局共享的 Memory 实例
         project_memory = Memory(
             embedder=embedder,
             llm=memory_llm,
             storage=str(DATA_DIR / "memory" / self.project_id),
+            root_scope=f"/projects/{self.project_id}",
         )
 
         # 用 project_id 创建专属 scope 视图
@@ -163,6 +173,7 @@ class AnalysisCrew():
 
         """创建分析Crew，顺序执行：提取需求 → 提取响应 → 偏离分析"""
         return Crew(
+            name=f"analysis-{self.project_id}",
             agents=self.agents,
             tasks=self.tasks,
             process=Process.sequential,
